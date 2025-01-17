@@ -16,21 +16,36 @@ class DoubanMovieSpider:
     def __init__(self):
         self.base_url = 'https://movie.douban.com/subject/'
         self.top250_url = 'https://movie.douban.com/top250'
-        self.columns = ['Title', 'Year', 'Rated', 'Released', 'Season', 'Episode', 
-                       'Runtime', 'Genre', 'Director', 'Writer', 'Actors', 'Plot',
-                       'Language', 'Country', 'Awards', 'Poster', 'Metascore',
-                       'imdbRating', 'imdbVotes', 'imdbID', 'seriesID', 'Type', 'MovieID']
+        # 重新定义更合理的列名
+        self.columns = [
+            'movie_id',          # 电影ID
+            'title',             # 电影标题
+            'original_title',    # 原始标题
+            'year',              # 年份
+            'director',          # 导演
+            'screenwriter',      # 编剧
+            'actors',            # 主演
+            'genre',             # 类型
+            'country',           # 制片国家/地区
+            'language',          # 语言
+            'release_date',      # 上映日期
+            'runtime',           # 片长
+            'rating_score',      # 评分
+            'rating_count',      # 评分人数
+            'summary',           # 简介
+            'poster_url'         # 海报链接
+        ]
         
         # 定义电影ID区间
         self.id_ranges = [
-            (1290000, 1300000),  # 经典老电影
-            (1400000, 1500000),  # 较早期电影
-            (3000000, 3500000),  # 近期电影
-            (25800000, 26000000)  # 最新电影
+            (36466189, 36566189),  # 经典老电影
+            (36566189, 36666189),  # 较早期电影
+            (36666189, 36766189),  # 近期电影
+            (36766189, 36866189)  # 最新电影
         ]
         
         self.csv_file = 'douban_movies.csv'
-        self.batch_size = 25
+        self.batch_size = 50
         self.max_entries = 10000
         
         # 配置日志
@@ -74,7 +89,7 @@ class DoubanMovieSpider:
             print(f"读取CSV文件失败: {str(e)}")
             return 0
             
-    def random_sleep(self, min_time=3, max_time=7):
+    def random_sleep(self, min_time=1, max_time=3):
         """随机等待"""
         time.sleep(random.uniform(min_time, max_time))
         
@@ -131,20 +146,28 @@ class DoubanMovieSpider:
                 
             movie = {}
             
-            # 添加电影ID
-            if movie_id:
-                movie['MovieID'] = movie_id
-            else:
-                movie['MovieID'] = url.split('/')[-2]
+            # 获取电影ID
+            movie['movie_id'] = movie_id if movie_id else url.split('/')[-2]
             
-            # 标题
+            # 获取标题
             try:
-                movie['Title'] = self.driver.find_element(By.XPATH, '//h1/span[1]').text.strip()
+                title_element = self.driver.find_element(By.XPATH, '//h1/span[1]')
+                movie['title'] = title_element.text.strip()
             except:
                 logging.info(f"无法获取电影标题，跳过 ID: {movie_id}")
                 return None
+                
+            # 获取原始标题
+            try:
+                original_title = self.driver.find_element(By.XPATH, '//span[@property="v:itemreviewed"]').text
+                # 如果原始标题包含中文标题，去掉中文标题部分
+                if movie['title'] in original_title:
+                    original_title = original_title.replace(movie['title'], '').strip()
+                movie['original_title'] = original_title
+            except:
+                movie['original_title'] = ''
             
-            # 基本信息
+            # 获取基本信息
             info = self.driver.find_element(By.ID, 'info').text
             info_dict = {}
             for line in info.split('\n'):
@@ -152,58 +175,56 @@ class DoubanMovieSpider:
                     key, value = line.split(':', 1)
                     info_dict[key.strip()] = value.strip()
             
-            # 提取各字段
-            movie['Year'] = info_dict.get('年份', '')
-            movie['Director'] = info_dict.get('导演', '')
-            movie['Writer'] = info_dict.get('编剧', '')
-            movie['Actors'] = info_dict.get('主演', '')
-            movie['Genre'] = info_dict.get('类型', '')
-            movie['Country'] = info_dict.get('制片国家/地区', '')
-            movie['Language'] = info_dict.get('语言', '')
-            movie['Runtime'] = info_dict.get('片长', '')
+            # 提取年份
+            try:
+                year_text = self.driver.find_element(By.XPATH, '//span[@class="year"]').text
+                movie['year'] = year_text.strip('()')
+            except:
+                movie['year'] = info_dict.get('年份', '')
             
-            # 评分
-            try:
-                movie['Rated'] = self.driver.find_element(By.CLASS_NAME, 'rating_num').text
-            except:
-                movie['Rated'] = ''
-                
-            # 剧情简介
-            try:
-                movie['Plot'] = self.driver.find_element(By.ID, 'link-report').text.strip()
-            except:
-                movie['Plot'] = ''
-                
-            # 海报
-            try:
-                movie['Poster'] = self.driver.find_element(By.ID, 'mainpic').find_element(By.TAG_NAME, 'img').get_attribute('src')
-            except:
-                movie['Poster'] = ''
-                
-            # 获奖情况
-            try:
-                movie['Awards'] = self.driver.find_element(By.CLASS_NAME, 'award').text
-            except:
-                movie['Awards'] = ''
-                
-            # IMDb信息
-            try:
-                imdb_link = self.driver.find_element(By.XPATH, "//div[@id='info']/a[contains(@href, 'imdb.com')]")
-                movie['imdbID'] = imdb_link.get_attribute('href').split('/')[-1]
-            except:
-                movie['imdbID'] = ''
-                
-            # 其他字段设为空值
-            movie['Released'] = ''
-            movie['Season'] = ''
-            movie['Episode'] = ''
-            movie['Metascore'] = ''
-            movie['imdbRating'] = ''
-            movie['imdbVotes'] = ''
-            movie['seriesID'] = ''
-            movie['Type'] = 'movie'
+            # 提取其他信息
+            movie['director'] = info_dict.get('导演', '')
+            movie['screenwriter'] = info_dict.get('编剧', '')
+            movie['actors'] = info_dict.get('主演', '')
+            movie['genre'] = info_dict.get('类型', '')
+            movie['country'] = info_dict.get('制片国家/地区', '')
+            movie['language'] = info_dict.get('语言', '')
+            movie['release_date'] = info_dict.get('上映日期', '')
+            movie['runtime'] = info_dict.get('片长', '')
             
-            logging.info(f"成功解析电影: {movie['Title']} (ID: {movie['MovieID']})")
+            # 获取评分信息
+            try:
+                movie['rating_score'] = self.driver.find_element(By.CLASS_NAME, 'rating_num').text
+                rating_count_element = self.driver.find_element(By.CLASS_NAME, 'rating_people')
+                movie['rating_count'] = rating_count_element.text.split('人评价')[0]
+            except:
+                movie['rating_score'] = ''
+                movie['rating_count'] = ''
+            
+            # 获取剧情简介
+            try:
+                summary_element = self.driver.find_element(By.CSS_SELECTOR, 'span.all.hidden')
+                # 处理简介文本，替换回车和换行符为空格
+                summary_text = summary_element.text.strip()
+                summary_text = ' '.join(summary_text.split())  # 将所有空白字符（包括回车换行）替换为单个空格
+                movie['summary'] = summary_text
+            except:
+                try:
+                    # 尝试获取短简介
+                    summary_element = self.driver.find_element(By.CSS_SELECTOR, 'span[property="v:summary"]')
+                    summary_text = summary_element.text.strip()
+                    summary_text = ' '.join(summary_text.split())  # 同样处理短简介的换行
+                    movie['summary'] = summary_text
+                except:
+                    movie['summary'] = ''
+            
+            # 获取海报URL
+            try:
+                movie['poster_url'] = self.driver.find_element(By.ID, 'mainpic').find_element(By.TAG_NAME, 'img').get_attribute('src')
+            except:
+                movie['poster_url'] = ''
+            
+            logging.info(f"成功解析电影: {movie['title']} (ID: {movie['movie_id']})")
             return movie
             
         except Exception as e:
@@ -246,8 +267,8 @@ class DoubanMovieSpider:
                 
                 while current_id <= end_id and total_entries < self.max_entries:
                     try:
-                        # 增加更长的随机等待时间
-                        wait_time = random.uniform(3, 10)
+                        # 减少等待时间
+                        wait_time = random.uniform(1, 3)
                         logging.info(f"等待 {wait_time:.1f} 秒后继续...")
                         time.sleep(wait_time)
                         
@@ -258,12 +279,12 @@ class DoubanMovieSpider:
                             total_entries += 1
                             logging.info(f"成功爬取第 {total_entries} 条数据")
                             
-                            # 每25条保存一次
+                            # 每50条保存一次，减少保存频率
                             if len(batch_movies) >= self.batch_size:
                                 self.save_to_csv(batch_movies)
                                 batch_movies = []
-                                # 保存后额外等待，降低频率
-                                time.sleep(random.uniform(5, 15))
+                                # 保存后等待时间也减少
+                                time.sleep(random.uniform(2, 5))
                                 
                             # 检查是否达到目标条数
                             if total_entries >= self.max_entries:
@@ -277,22 +298,17 @@ class DoubanMovieSpider:
                             
                     except TimeoutException:
                         logging.error(f"访问ID {current_id} 超时，等待后继续")
-                        time.sleep(random.uniform(10, 20))  # 超时后等待更长时间
+                        time.sleep(random.uniform(5, 10))  # 减少超时后的等待时间
                         continue
                     except Exception as e:
                         logging.error(f"处理ID {current_id} 时出错: {str(e)}")
-                        time.sleep(random.uniform(5, 10))
+                        time.sleep(random.uniform(2, 5))  # 减少错误后的等待时间
                         continue
                     finally:
                         current_id += 1
                         
-                # 每个区间结束后保存剩余数据
-                if batch_movies:
-                    self.save_to_csv(batch_movies)
-                    batch_movies = []
-                    
-                # 每个区间结束后额外等待
-                time.sleep(random.uniform(10, 20))
+                # 每个区间结束后等待时间也减少
+                time.sleep(random.uniform(3, 7))
                     
         except KeyboardInterrupt:
             logging.info("用户手动停止爬取")
@@ -327,14 +343,14 @@ class DoubanMovieSpider:
                     movie_data = self.parse_movie_detail(url=link)
                     if movie_data:
                         page_movies.append(movie_data)
-                    self.random_sleep(2, 5)
+                    self.random_sleep(1, 3)  # 减少每部电影之间的等待时间
                     
                 if page_movies:
                     all_movies.extend(page_movies)
                     self.save_to_csv(page_movies)
                 
                 if start < 225:
-                    wait_time = random.uniform(3, 10)
+                    wait_time = random.uniform(2, 5)  # 减少翻页等待时间
                     logging.info(f"等待 {wait_time:.1f} 秒后继续下一页...")
                     time.sleep(wait_time)
                     
